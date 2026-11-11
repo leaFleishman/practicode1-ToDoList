@@ -62,10 +62,10 @@ if (jwtKey.Length < 32)
     throw new InvalidOperationException("JWT secret must be at least 32 bytes long.");
 }
 
-var jwtIssuer = jwtSettings["Issuer"]
-    ?? throw new InvalidOperationException("JWT issuer is not configured.");
-var jwtAudience = jwtSettings["Audience"]
-    ?? throw new InvalidOperationException("JWT audience is not configured.");
+// ערך ריק (למשל משתנה סביבה ריק ב-Render) נחשב כלא מוגדר, ואז משתמשים בברירת המחדל.
+// בלי זה, ערך ריק גורם לכל טוקן להידחות (IDX10208) והמשתמש מוחזר למסך ההתחברות.
+var jwtIssuer = string.IsNullOrWhiteSpace(jwtSettings["Issuer"]) ? "TodoApi" : jwtSettings["Issuer"]!.Trim();
+var jwtAudience = string.IsNullOrWhiteSpace(jwtSettings["Audience"]) ? "TodoListReact" : jwtSettings["Audience"]!.Trim();
 var tokenLifetimeMinutes = jwtSettings.GetValue<int>("TokenLifetimeMinutes", 60);
 if (tokenLifetimeMinutes <= 0)
 {
@@ -104,7 +104,16 @@ using (var scope = app.Services.CreateScope())
         UNIQUE KEY IX_Users_Username (Username)
     ) CHARACTER SET utf8mb4;");
 
-    // הוספת עמודת UserId לטבלת Items אם אינה קיימת - כדי שכל משתמש יראה רק את המשימות שלו
+    // יצירת טבלת Items אם אינה קיימת (למשל במסד נתונים חדש בענן)
+    db.Database.ExecuteSqlRaw(@"CREATE TABLE IF NOT EXISTS Items (
+        Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        Name VARCHAR(100) NULL,
+        IsComplete TINYINT(1) NULL,
+        UserId INT NULL,
+        INDEX IX_Items_UserId (UserId)
+    ) CHARACTER SET utf8mb4;");
+
+    // הוספת עמודת UserId לטבלת Items קיימת אם אינה קיימת - כדי שכל משתמש יראה רק את המשימות שלו
     var hasUserIdColumn = db.Database.SqlQueryRaw<int>(@"SELECT COUNT(*) AS Value
         FROM information_schema.COLUMNS
         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Items' AND COLUMN_NAME = 'UserId'")
