@@ -103,6 +103,17 @@ using (var scope = app.Services.CreateScope())
         PasswordHash VARCHAR(512) NOT NULL,
         UNIQUE KEY IX_Users_Username (Username)
     ) CHARACTER SET utf8mb4;");
+
+    // הוספת עמודת UserId לטבלת Items אם אינה קיימת - כדי שכל משתמש יראה רק את המשימות שלו
+    var hasUserIdColumn = db.Database.SqlQueryRaw<int>(@"SELECT COUNT(*) AS Value
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Items' AND COLUMN_NAME = 'UserId'")
+        .AsEnumerable()
+        .Single() > 0;
+    if (!hasUserIdColumn)
+    {
+        db.Database.ExecuteSqlRaw("ALTER TABLE Items ADD COLUMN UserId INT NULL, ADD INDEX IX_Items_UserId (UserId);");
+    }
 }
 
 if (app.Environment.IsDevelopment())
@@ -197,15 +208,23 @@ app.MapPost("/auth/login", async (
 })
 .AllowAnonymous();
 
-// 1. שליפת כל המשימות
-app.MapGet("/items", async (ToDoDbContext context) =>
+// מזהה המשתמש המחובר, מתוך ה-JWT
+static int CurrentUserId(ClaimsPrincipal user) =>
+    int.Parse(user.FindFirstValue(ClaimTypes.NameIdentifier)
+        ?? throw new InvalidOperationException("Authenticated user has no id claim."));
+
+// 1. שליפת המשימות של המשתמש המחובר בלבד
+app.MapGet("/items", async (ClaimsPrincipal user, ToDoDbContext context) =>
 {
-    return await context.Items.ToListAsync();
+    var userId = CurrentUserId(user);
+    return await context.Items.Where(item => item.UserId == userId).ToListAsync();
 }).RequireAuthorization();
 
-// 2. הוספת משימה חדשה
-app.MapPost("/items", async (Item item, ToDoDbContext context) =>
+// 2. הוספת משימה חדשה למשתמש המחובר
+app.MapPost("/items", async (Item item, ClaimsPrincipal user, ToDoDbContext context) =>
 {
+    item.Id = 0;
+    item.UserId = CurrentUserId(user);
     context.Items.Add(item);
     await context.SaveChangesAsync();
 
@@ -213,14 +232,16 @@ app.MapPost("/items", async (Item item, ToDoDbContext context) =>
 }).RequireAuthorization();
 
 // 3. עדכון משימה
-app.MapPut("/items/{id}", async (int id, Item updatedItem, ToDoDbContext context) =>
+app.MapPut("/items/{id}", async (int id, Item updatedItem, ClaimsPrincipal user, ToDoDbContext context) =>
 {
-    var item = await context.Items.FindAsync(id);
+    var userId = CurrentUserId(user);
+    var item = await context.Items.SingleOrDefaultAsync(i => i.Id == id && i.UserId == userId);
 
     if (item == null)
         return Results.NotFound();
 
-    item.Name = updatedItem.Name;
+    // אם לא נשלח שם - שומרים את השם הקיים
+    item.Name = updatedItem.Name ?? item.Name;
     item.IsComplete = updatedItem.IsComplete;
 
     await context.SaveChangesAsync();
@@ -229,9 +250,10 @@ app.MapPut("/items/{id}", async (int id, Item updatedItem, ToDoDbContext context
 }).RequireAuthorization();
 
 // 4. מחיקת משימה
-app.MapDelete("/items/{id}", async (int id, ToDoDbContext context) =>
+app.MapDelete("/items/{id}", async (int id, ClaimsPrincipal user, ToDoDbContext context) =>
 {
-    var item = await context.Items.FindAsync(id);
+    var userId = CurrentUserId(user);
+    var item = await context.Items.SingleOrDefaultAsync(i => i.Id == id && i.UserId == userId);
 
     if (item == null)
         return Results.NotFound();
