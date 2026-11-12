@@ -50,8 +50,13 @@ builder.Services.AddCors(options =>
 
 var connectionString = builder.Configuration.GetConnectionString("ToDoDB")
     ?? throw new InvalidOperationException("Connection string 'ToDoDB' is not configured.");
+// גרסת השרת נקבעת פעם אחת, מחוץ ל-lambda. ServerVersion.AutoDetect בתוך ה-lambda
+// פותח חיבור נוסף ל-DB בכל יצירת DbContext וגורם לחריגה מ-max_user_connections.
+var serverVersion = new MySqlServerVersion(new Version(8, 0, 36));
+// חלופה: זיהוי אוטומטי שרץ פעם אחת בלבד בעליית האפליקציה:
+// var serverVersion = ServerVersion.AutoDetect(connectionString);
 builder.Services.AddDbContext<ToDoDbContext>(options =>
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+    options.UseMySql(connectionString, serverVersion));
 
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 var jwtSecret = jwtSettings["Secret"]
